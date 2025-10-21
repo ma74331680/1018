@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Upload, Download, Sparkles, Image, RefreshCw, Wand2, X } from 'lucide-react';
 
+
 export default function StickerGenerator() {
   const [uploadedImage, setUploadedImage] = useState(null);
   const [processing, setProcessing] = useState(false);

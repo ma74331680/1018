@@ -11,8 +11,22 @@ export default function StickerGenerator() {
   const filePoseRef = useRef(null);
   const canvasRef = useRef(null);
 
+  // 新增：只允許 jpg / jpeg / png
+  const allowedTypes = ['image/png', 'image/jpeg'];
+  const validateFile = (file) => {
+    if (!file) return false;
+    const t = file.type;
+    const name = (file.name || '').toLowerCase();
+    return allowedTypes.includes(t) || /\.(jpe?g|png)$/.test(name);
+  };
+
   const handleFaceUpload = (e) => {
     const file = e.target.files[0];
+    if (!validateFile(file)) {
+      alert('只允許上傳 JPG / PNG 格式的 Face 圖片');
+      e.target.value = '';
+      return;
+    }
     if (file && file.type.startsWith('image/')) {
       const reader = new FileReader();
       reader.onload = (event) => {
@@ -25,6 +39,11 @@ export default function StickerGenerator() {
 
   const handlePoseUpload = (e) => {
     const file = e.target.files[0];
+    if (!validateFile(file)) {
+      alert('只允許上傳 JPG / PNG 格式的 Pose 圖片');
+      e.target.value = '';
+      return;
+    }
     if (file && file.type.startsWith('image/')) {
       const reader = new FileReader();
       reader.onload = (event) => {
@@ -52,7 +71,7 @@ export default function StickerGenerator() {
     try {
       const formData = new FormData();
 
-      // 將 base64 圖片轉換為 Blob 並正確命名
+      // 將 base64 圖片轉為 Blob 並正確命名
       const faceBlob = await fetch(uploadedFace).then(r => r.blob());
       const faceName = `face_${Date.now()}.png`;
       formData.append('face', new File([faceBlob], faceName, { type: 'image/png' }));
@@ -63,51 +82,45 @@ export default function StickerGenerator() {
         formData.append('pose', new File([poseBlob], poseName, { type: 'image/png' }));
       }
 
-      // 正確設置 headers 和 credentials
-      const response = await fetch('http://120.110.113.166:9000/api/jobs', {
+      // 將檔案上傳到 FastAPI
+      const jobsResp = await fetch('http://172.16.17.16:9000/api/jobs', {
         method: 'POST',
-        headers: {
-          'Accept': 'application/json',
-          // 注意：使用 FormData 時不要設置 Content-Type，讓瀏覽器自動處理
-        },
-        credentials: 'include',
+        headers: { 'Accept': 'application/json' },
         body: formData
       });
 
-      console.log('Response status:', response.status); // 偵錯用
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Error response:', errorText); // 偵錯用
-        throw new Error(`Upload failed: ${response.status} ${errorText}`);
+      console.log('jobs response status:', jobsResp.status);
+      if (!jobsResp.ok) {
+        const text = await jobsResp.text();
+        throw new Error(`jobs upload failed: ${jobsResp.status} ${text}`);
       }
 
-      const data = await response.json();
-      console.log('Response data:', data); // 偵錯用
-      const promptId = data.prompt_id;
+      const jobsData = await jobsResp.json();
+      console.log('jobs response json:', jobsData);
+      const promptId = jobsData.prompt_id || jobsData.promptId || jobsData.prompt_id;
+      const clientId = jobsData.client_id || jobsData.clientId || jobsData.client_id;
 
-      // WebSocket 連接也使用正確的端點
-      const ws = new WebSocket(`ws://120.110.113.166:9000/ws/progress/${promptId}`);
-
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        console.log('Progress:', data);
-        // 這裡可以更新進度UI
-      };
-
-      // 等待處理完成後獲取結果
-      const resultResponse = await fetch(`http://120.110.113.166:9000/api/result/${promptId}`);
-      if (!resultResponse.ok) {
-        throw new Error('Failed to get result');
+      if (!promptId || !clientId) {
+        throw new Error('no prompt_id or client_id returned from API');
       }
 
-      const imageBlob = await resultResponse.blob();
+      // 等待 ComfyUI 完成並透過 /wait 直接取得圖片（會 long-poll）
+      const waitUrl = `http://172.16.17.16:9000/api/result/${encodeURIComponent(promptId)}/wait?client_id=${encodeURIComponent(clientId)}`;
+      const resultResp = await fetch(waitUrl, { method: 'GET' });
+
+      console.log('result wait status:', resultResp.status);
+      if (!resultResp.ok) {
+        const txt = await resultResp.text();
+        throw new Error(`get result failed: ${resultResp.status} ${txt}`);
+      }
+
+      const imageBlob = await resultResp.blob();
       const imageUrl = URL.createObjectURL(imageBlob);
       setStyledImage(imageUrl);
 
     } catch (err) {
-      console.error('Error details:', err); // 詳細錯誤資訊
-      alert('上傳失敗：' + err.message);
+      console.error('Error details:', err);
+      alert('上傳或取得結果失敗：' + (err.message || err));
     } finally {
       setProcessing(false);
     }
@@ -200,7 +213,8 @@ export default function StickerGenerator() {
                       </div>
                     </div>
                   )}
-                  <input ref={fileFaceRef} type="file" accept="image/*" onChange={handleFaceUpload} className="hidden" />
+                  {/* input refs（修改 accept 屬性） */}
+                  <input ref={fileFaceRef} type="file" accept="image/png,image/jpeg" onChange={handleFaceUpload} className="hidden" />
                 </div>
 
                 {/* Pose upload */}
@@ -239,7 +253,7 @@ export default function StickerGenerator() {
                       </div>
                     </div>
                   )}
-                  <input ref={filePoseRef} type="file" accept="image/*" onChange={handlePoseUpload} className="hidden" />
+                  <input ref={filePoseRef} type="file" accept="image/png,image/jpeg" onChange={handlePoseUpload} className="hidden" />
                 </div>
               </div>
 
